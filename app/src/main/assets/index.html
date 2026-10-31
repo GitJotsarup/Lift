@@ -183,6 +183,38 @@ select{width:100%;font:inherit;font-weight:600;background:var(--bg);border:0;bor
 .coach li button{flex-shrink:0;padding:8px 12px;border-radius:10px;background:var(--sun);font-weight:700;font-size:14px}
 .wv.tap{cursor:pointer;border-radius:10px;padding:2px 4px}
 .wv.tap b{text-decoration:underline dotted var(--line) 2px;text-underline-offset:4px}
+.coach li .btns{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.coach li button.later{background:var(--bg);color:var(--mute)}
+.lvwrap{display:flex;gap:8px;margin-top:12px}
+.lvwrap .levelup{margin-top:0;flex:1}
+.lvwrap .later{flex-shrink:0;padding:10px 12px;border-radius:12px;background:var(--bg);font-weight:700;font-size:13px;color:var(--mute)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + env(safe-area-inset-bottom,0px));background:var(--ink);color:#fff;border-radius:14px;padding:10px 16px;font-size:14px;font-weight:600;z-index:60;max-width:calc(100% - 32px);text-align:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+/* calendar */
+.calhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.calhead .navb{width:38px;height:38px;border-radius:12px;background:var(--bg);font-size:18px;font-weight:700}
+.calhead .navb:disabled{opacity:.35;cursor:default}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calgrid .wd{font-size:11px;color:var(--mute);font-weight:700;text-align:center;padding-bottom:2px}
+.cday{aspect-ratio:1/1.15;border-radius:12px;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:4px 0 3px;gap:2px;min-width:0}
+.cday.blank{background:none}
+.cday.future{opacity:.4}
+.cday.today{box-shadow:inset 0 0 0 2px var(--accent)}
+.cday.gym{background:var(--accent-soft)}
+.cday .n{font-size:12px;font-weight:700;line-height:1.2}
+.cday .g{font-size:11px;font-weight:800;color:#fff;background:var(--accent);border-radius:6px;padding:0 5px;line-height:16px}
+.cday .em{font-size:11px;line-height:1}
+.cday .dots{display:flex;gap:2px;margin-top:auto}
+.cday .dots i{width:5px;height:5px;border-radius:50%}
+.cday .dots i.y{background:var(--good)} .cday .dots i.n{background:var(--bad)} .cday .dots i.p{background:var(--sun)}
+.calsum{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:12px;font-size:13px;color:var(--mute)}
+.calsum b{color:var(--ink)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:12px;color:var(--mute);align-items:center}
+.legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.dlist{list-style:none;margin:10px 0 0;padding:0;max-height:55vh;overflow:auto}
+.dlist li{padding:9px 0;border-top:1px solid var(--line);font-size:15px;display:flex;justify-content:space-between;gap:10px}
+.dlist li span:last-child{color:var(--mute);text-align:right;white-space:nowrap}
+.dlist li.h{font-weight:700;border-top:0;padding-top:14px}
 textarea{width:100%;height:110px;border:0;border-radius:14px;background:var(--bg);padding:12px;font:13px/1.4 ui-monospace,monospace;margin:12px 0;resize:none}
 </style>
 </head>
@@ -197,6 +229,7 @@ textarea{width:100%;height:110px;border:0;border-radius:14px;background:var(--bg
 <div class="scrim" id="scrim" data-act="closesheet"></div>
 <div class="sheet" id="sheet"></div>
 <div class="cele" id="cele"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 /* ---------- program ---------- */
@@ -248,10 +281,10 @@ const DN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], MN=['Jan','Feb','Mar','Apr
 
 /* ---------- state ---------- */
 const KEY='lift.v1';
-function fresh(){return{v:2,updatedAt:0,next:'A',weights:{},swaps:{},hits:{},rh:{},comp:{},cfg:{},rules:{w:2,r:3,s:6},push:{},pushTarget:10,pushSince:dk(),sessions:[],acts:[],snacks:{},bw:[{d:dk(),kg:79}],active:null}}
+function fresh(){return{v:2,updatedAt:0,next:'A',weights:{},swaps:{},hits:{},rh:{},comp:{},cfg:{},snooze:{},rules:{w:2,r:3,s:6},push:{},pushTarget:10,pushSince:dk(),sessions:[],acts:[],snacks:{},bw:[{d:dk(),kg:79}],active:null}}
 function norm(x){return Object.assign(fresh(),x||{})}
 let S;try{S=norm(JSON.parse(localStorage.getItem(KEY)))}catch(e){S=fresh()}
-let view='today', openCue=null;
+let view='today', openCue=null, calM=null;
 function save(){S.updatedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}schedulePush()}
 
 /* cloud sync, private to you (only when opened inside Claude) */
@@ -309,16 +342,34 @@ const BADGES=[
 ];
 
 /* ---------- coach: when to go up ---------- */
+/* "Not yet": hide a suggestion until you've done that workout once more (push-ups: 7 days) */
+const daySessions=day=>S.sessions.filter(s=>s.day===day).length;
+function snoozeKey(kind,day,i){
+  if(kind==='p')return `p|${S.pushTarget}`;
+  const k=keyOf(day,i),id=exFor(day,i);
+  return `${kind}|${k}|${kind==='w'?wOf(id):kind==='r'?repsOf(day,i):setsOf(day,i)}`}
+function isSnoozed(kind,day,i){const v=(S.snooze||{})[snoozeKey(kind,day,i)];if(v===undefined)return false;
+  return kind==='p'?dk()<v:daySessions(day)<v}
+function snoozeSugg(kind,day,i){
+  S.snooze=S.snooze||{};const sk=snoozeKey(kind,day,i);
+  if(kind==='p'){S.snooze[sk]=dk(addDays(new Date(),7));save();render();toast('Okay. Staying where you are for another week.');return}
+  // during a workout the current session counts too, so it asks again the time after
+  const extra=S.active&&S.active.day===day?2:1;
+  S.snooze[sk]=daySessions(day)+extra;save();render();
+  toast(`No problem. Staying at this for now. I’ll ask again after your next Workout ${day}.`);
+}
+let toastT=null;
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2600)}
 function suggestions(day,i){
   const id=exFor(day,i),k=keyOf(day,i),out=[];
   if(!repBased(id)){const h=S.hits[id];if(h&&h.w===wOf(id)&&h.n>=S.rules.w)out.push({kind:'w',day,i,text:`${EX[id].n}: go up to ${fmt(wOf(id)+stepOf(id))} kg`,why:`You hit every set at ${fmt(wOf(id))} kg ${h.n} workouts in a row.`});}
   else{const h=S.rh[k];if(h&&h.r===repsOf(day,i)&&h.n>=S.rules.r)out.push({kind:'r',day,i,text:`${EX[id].n}: go up to ${bumpReps(repsOf(day,i))}`,why:`Every set done ${h.n} workouts in a row.`});}
   if((S.comp[k]||0)>=S.rules.s&&setsOf(day,i)<4)out.push({kind:'s',day,i,text:`${EX[id].n}: add a set (${setsOf(day,i)+1} sets)`,why:`${S.comp[k]} complete workouts on ${setsOf(day,i)} sets.`});
-  return out;
+  return out.filter(s=>!isSnoozed(s.kind,day,i));
 }
 function allSuggestions(){const out=[];['A','B','C'].forEach(d=>DAYS[d].slots.forEach((_,i)=>out.push(...suggestions(d,i))));
   const since=Object.keys(S.push).filter(k=>k>=S.pushSince&&S.push[k]).length;
-  if(since>=14&&S.pushTarget<50)out.push({kind:'p',text:`Push-ups: go up to ${S.pushTarget+5} a day`,why:`${since} days done at ${S.pushTarget}.`});
+  if(since>=14&&S.pushTarget<50&&!isSnoozed('p'))out.push({kind:'p',text:`Push-ups: go up to ${S.pushTarget+5} a day`,why:`${since} days done at ${S.pushTarget}.`});
   return out}
 function applySugg(kind,day,i){
   if(kind==='w'){const id=exFor(day,i);S.weights[id]=Math.round((wOf(id)+stepOf(id))*100)/100;delete S.hits[id]}
@@ -366,7 +417,7 @@ function vToday(){
     <button class="btn primary" data-act="start">Start workout ${d}</button>
     <div class="pick">Do a different one:${['A','B','C'].map(k=>`<button class="${k===d?'on':''}" data-act="pick" data-v="${k}" aria-label="Workout ${k}">${k}</button>`).join('')}</div>
   </section>
-  ${sugg.length?`<section class="card coach"><h2>Ready to level up</h2><p class="muted">You’ve earned these. Apply them when you’re ready.</p><ul>${sugg.map(s=>`<li><div><b>${s.text}</b><p class="muted">${s.why}</p></div><button data-act="apply" data-k="${s.kind}" data-d="${s.day||''}" data-i="${s.i??''}">Apply</button></li>`).join('')}</ul></section>`:''}
+  ${sugg.length?`<section class="card coach"><h2>Ready to level up</h2><p class="muted">You’ve earned these. Apply them when you’re ready.</p><ul>${sugg.map(s=>`<li><div><b>${s.text}</b><p class="muted">${s.why}</p></div><div class="btns"><button data-act="apply" data-k="${s.kind}" data-d="${s.day||''}" data-i="${s.i??''}">Apply</button><button class="later" data-act="later" data-k="${s.kind}" data-d="${s.day||''}" data-i="${s.i??''}">No, not yet</button></div></li>`).join('')}</ul></section>`:''}
   <section class="card">${snackCard}${yQ}</section>
   <section class="card">
     <div class="hrow"><div><h2>${S.pushTarget} push-ups</h2><p class="muted">${pushDone?`Done today. ${ps}-day streak.`:ps?`Daily habit. ${ps}-day streak.`:'Every day, at home.'}</p></div><button class="check ${pushDone?'on':''}" data-act="push">${pushDone?'✓ Done':'Done'}</button></div>
@@ -405,7 +456,7 @@ function vWorkout(){
        <div class="tools"><button class="tool" data-act="cue" data-i="${i}">How</button>${slot.length>1?`<button class="tool" data-act="swap" data-i="${i}">Swap</button>`:''}</div></div>
       ${openCue===i?`<div class="cue">${e.cue}</div>`:''}
       <div class="exbody">${stepper}<div class="sets">${sets}</div></div>
-      ${sg.map(s=>`<button class="levelup" data-act="apply" data-k="${s.kind}" data-d="${a.day}" data-i="${i}">⬆ ${s.why} Tap to ${s.kind==='w'?`go up to ${fmt(wOf(id)+stepOf(id))} kg`:s.kind==='r'?`go up to ${esc(bumpReps(reps))}`:'add a set'}.</button>`).join('')}
+      ${sg.map(s=>`<div class="lvwrap"><button class="levelup" data-act="apply" data-k="${s.kind}" data-d="${a.day}" data-i="${i}">⬆ ${s.why} Tap to ${s.kind==='w'?`go up to ${fmt(wOf(id)+stepOf(id))} kg`:s.kind==='r'?`go up to ${esc(bumpReps(reps))}`:'add a set'}.</button><button class="later" data-act="later" data-k="${s.kind}" data-d="${a.day}" data-i="${i}">No, not yet</button></div>`).join('')}
     </article>`}).join('');
   return `<div class="wtop"><h1>Workout ${a.day}</h1><span class="timer" id="elapsed">${elapsed()}</span></div>
    <div class="progress"><i style="width:${total?done/total*100:0}%"></i></div>
@@ -447,10 +498,53 @@ function vProgress(){
     <div class="stat"><b>${fbM}</b><span>football games this month</span></div>
     <div class="stat"><b>${fmt(kmM)}</b><span>km run this month</span></div>
   </div>
+  <section class="card">${vCal()}</section>
   <section class="card"><h2>Badges</h2><div class="badges">${BADGES.map(b=>`<div class="badge ${b.t()?'':'locked'}"><div class="bi">${b.i}</div>${b.n}</div>`).join('')}</div></section>
   <section class="card"><h2>Recent workouts</h2>${hist?`<ul class="hist">${hist}</ul>`:'<p class="muted">Finish your first workout and it shows up here.</p>'}</section>
   <p class="sync">${syncOK?'Saved to your account':'Saved on this phone'}</p>`;
 }
+
+/* ---------- calendar history ---------- */
+function firstDate(){const ds=[...S.sessions.map(s=>s.d),...S.acts.map(a=>a.d),...Object.keys(S.snacks),...Object.keys(S.push),...S.bw.map(b=>b.d)].filter(Boolean).sort();return ds.length?parse(ds[0]):new Date()}
+function vCal(){
+  const now=new Date();if(!calM)calM=new Date(now.getFullYear(),now.getMonth(),1);
+  const y=calM.getFullYear(),m=calM.getMonth(),days=new Date(y,m+1,0).getDate(),lead=(new Date(y,m,1).getDay()+6)%7,today=dk();
+  const fd=firstDate(),canPrev=new Date(fd.getFullYear(),fd.getMonth(),1)<calM,canNext=calM<new Date(now.getFullYear(),now.getMonth(),1);
+  const mk=`${y}-${pad(m+1)}`;
+  let cells='MTWTFSS'.split('').map(c=>`<div class="wd">${c}</div>`).join('')+'<div class="cday blank"></div>'.repeat(lead);
+  for(let d=1;d<=days;d++){const k=`${mk}-${pad(d)}`;
+    const g=S.sessions.filter(s=>s.d===k),f=S.acts.some(a=>a.d===k&&a.type==='football'),r=S.acts.some(a=>a.d===k&&a.type==='run'),sn=S.snacks[k],pu=S.push[k]===true;
+    const lbl=[`${d} ${MN[m]}`,g.length?`Workout ${g.map(s=>s.day).join(', ')}`:'',f?'football':'',r?'run':''].filter(Boolean).join(', ');
+    cells+=`<button class="cday ${k===today?'today':''} ${k>today?'future':''} ${g.length?'gym':''}" data-act="calday" data-d="${k}" aria-label="${lbl}" ${k>today?'disabled':''}>
+      <span class="n">${d}</span>${g.length?`<span class="g">${g.map(s=>s.day).join('')}</span>`:''}${f||r?`<span class="em">${f?'⚽':''}${r?'🏃':''}</span>`:''}
+      <span class="dots">${sn!==undefined?`<i class="${sn?'y':'n'}"></i>`:''}${pu?'<i class="p"></i>':''}</span></button>`}
+  const gm=S.sessions.filter(s=>s.d.startsWith(mk)).length,fm=S.acts.filter(a=>a.type==='football'&&a.d.startsWith(mk)).length;
+  const km=S.acts.filter(a=>a.type==='run'&&a.d.startsWith(mk)).reduce((s,a)=>s+a.km,0);
+  const snk=Object.keys(S.snacks).filter(k=>k.startsWith(mk)),sf=snk.filter(k=>S.snacks[k]).length;
+  const pm=Object.keys(S.push).filter(k=>k.startsWith(mk)&&S.push[k]).length;
+  return `<div class="calhead"><button class="navb" data-act="calm" data-v="-1" aria-label="Previous month" ${canPrev?'':'disabled'}>‹</button><h2 style="margin:0">${['January','February','March','April','May','June','July','August','September','October','November','December'][m]} ${y}</h2><button class="navb" data-act="calm" data-v="1" aria-label="Next month" ${canNext?'':'disabled'}>›</button></div>
+   <div class="calgrid">${cells}</div>
+   <div class="calsum"><span><b>${gm}</b> gym</span><span><b>${fm}</b> football</span><span><b>${fmt(km)}</b> km run</span><span><b>${sf}/${snk.length}</b> snack-free</span><span><b>${pm}</b> push-up days</span></div>
+   <div class="legend"><span><i style="background:var(--good)"></i>No snacks</span><span><i style="background:var(--bad)"></i>Snacked</span><span><i style="background:var(--sun)"></i>Push-ups</span><span>Tap a day for details</span></div>`;
+}
+function daySheet(k){
+  const d=parse(k),rows=[];
+  S.sessions.filter(s=>s.d===k).forEach(s=>{
+    rows.push(`<li class="h"><span>Workout ${s.day} · ${DAYS[s.day].name}</span><span>${Math.max(1,Math.round((s.dur||0)/60000))} min</span></li>`);
+    (s.ex||[]).forEach(e=>{const x=EX[e.id];if(!x)return;
+      const wt=x.type==='bw'||!e.w?'':x.type==='bar'?`${fmt(e.w+20)} kg`:x.type==='db'?`${fmt(e.w)} kg each`:`${fmt(e.w)} kg`;
+      rows.push(`<li><span>${x.n}</span><span>${wt?wt+' · ':''}${e.sets}×${esc(e.reps)}</span></li>`)})});
+  const acts=S.acts.filter(a=>a.d===k);
+  if(acts.length||S.push[k]||S.snacks[k]!==undefined||S.bw.some(b=>b.d===k))rows.push('<li class="h"><span>Everything else</span><span></span></li>');
+  acts.filter(a=>a.type==='football').forEach(()=>rows.push('<li><span>⚽ Football</span><span>~1 hr</span></li>'));
+  acts.filter(a=>a.type==='run').forEach(a=>rows.push(`<li><span>🏃 Run</span><span>${fmt(a.km)} km</span></li>`));
+  const ch=acts.filter(a=>a.type==='chin').reduce((s,a)=>s+a.n,0);if(ch)rows.push(`<li><span>🧗 Chin-ups</span><span>${ch}</span></li>`);
+  if(S.push[k])rows.push(`<li><span>💪 Push-ups</span><span>Done</span></li>`);
+  if(S.snacks[k]!==undefined)rows.push(`<li><span>${S.snacks[k]?'🍏 No snacks':'🍪 Snacked'}</span><span></span></li>`);
+  const bw=S.bw.find(b=>b.d===k);if(bw)rows.push(`<li><span>⚖️ Body weight</span><span>${fmt(bw.kg)} kg</span></li>`);
+  openSheet(`<h2>${DN[d.getDay()]} ${d.getDate()} ${MN[d.getMonth()]} ${d.getFullYear()}</h2>
+   ${rows.length?`<ul class="dlist">${rows.join('')}</ul>`:'<p class="muted" style="margin:10px 0 4px">Nothing logged this day. Rest days count too.</p>'}
+   <button class="btn ghost" style="margin-top:14px" data-act="closesheet">Close</button>`)}
 
 function vSettings(){
   const rule=(k,label,min,max)=>`<div class="rule"><span>${label}</span><div class="mini"><button data-act="rule" data-k="${k}" data-v="-1" aria-label="Fewer">−</button><span>${S.rules[k]}</span><button data-act="rule" data-k="${k}" data-v="1" aria-label="More">+</button></div></div>`;
@@ -527,6 +621,9 @@ document.addEventListener('click',e=>{
    case'wtype':wSheet(b.dataset.id);break;
    case'savew':{const x=parseFloat($('#numIn').value);if(x>=0&&x<500){S.weights[sheetId]=Math.round(x*100)/100;save();closeSheet();render()}break}
    case'apply':applySugg(b.dataset.k,b.dataset.d,b.dataset.i===''?null:+b.dataset.i);break;
+   case'later':snoozeSugg(b.dataset.k,b.dataset.d,b.dataset.i===''?null:+b.dataset.i);break;
+   case'calm':{calM=new Date(calM.getFullYear(),calM.getMonth()+(+v),1);render();break}
+   case'calday':daySheet(b.dataset.d);break;
    case'cue':{const i=+b.dataset.i;openCue=openCue===i?null:i;render();break}
    case'swap':{const i=+b.dataset.i,a=S.active,k=a.day+i;S.swaps[k]=((S.swaps[k]||0)+1)%DAYS[a.day].slots[i].length;a.done[i]=[];save();render();break}
    case'cancel':if(confirm('Cancel this workout? Nothing will be saved.')){S.active=null;stopRest();save();render()}break;
